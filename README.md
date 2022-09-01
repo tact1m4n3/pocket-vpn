@@ -1,33 +1,30 @@
 # Pocket VPN
 > A VPN that can fit right in your pocket!
 
-## Features
+## Features :sunglasses:
 - Secure
 - Fast
 - Reliable
 
-## Support
+## Support :ok_hand:
 - MacOS (server and client)
-- Linux (comming soon)
-- Windows (comming not so soon)
+- Linux (server and client)
+- Windows (client coming not so soon)
 
-## Usage
-'''
-Usage of ./pocket_vpn:
-  -A    capture all traffic
-  -L    log all traffic
-  -S    server mode
-  -T    test mode
-  -d string
-        tun device name
-  -l string
-        local ip (default "10.8.0.1")
+## Usage :brain:
+```
+Usage of ./pocket-vpn:
+  -A    send all traffic through vpn
+  -L    log all traffic to stdout
+  -S    start vpn in server mode
+  -c string
+        tun cidr address (default "10.1.0.1/24")
+  -i string
+        physical interface (default "en1")
   -m int
-        tun device mtu (default 1500)
-  -n string
-        network (default "10.8.0.0/24")
+        tun mtu (default 1500)
   -p string
-        passphrase (default "supersecurepassphrase")
+        passphrase (default "verysecretsecret")
   -s string
         server address (default ":25566")
-'''
+```
