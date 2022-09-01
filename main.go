@@ -25,9 +25,9 @@ func main() {
 		log.Fatal(err)
 	}
 
-	flag.BoolVar(&cfg.ServerMode, "S", false, "server mode")
-	flag.BoolVar(&cfg.LogTraffic, "L", false, "log traffic")
-	flag.BoolVar(&cfg.CaptureAll, "A", false, "capture all traffic")
+	flag.BoolVar(&cfg.ServerMode, "S", false, "start vpn in server mode")
+	flag.BoolVar(&cfg.LogTraffic, "L", false, "log all traffic to stdout")
+	flag.BoolVar(&cfg.CaptureAll, "A", false, "send all traffic through vpn")
 	flag.StringVar(&cfg.TunCIDR, "c", "10.1.0.1/24", "tun cidr address")
 	flag.IntVar(&cfg.TunMTU, "m", 1500, "tun mtu")
 	flag.StringVar(&cfg.PhysIface, "i", physIface, "physical interface")

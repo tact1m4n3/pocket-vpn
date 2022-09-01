@@ -29,6 +29,8 @@ type Server struct {
 	salt      []byte
 	listener  net.Listener
 	iface     *water.Interface
+	ipAddrs   []string
+	ipAddrsMu *sync.RWMutex
 	clients   map[string]net.Conn
 	clientsMu *sync.RWMutex
 }
@@ -39,6 +41,7 @@ func New(cfg *config.Config) *Server {
 		wg:        &sync.WaitGroup{},
 		quitCh:    make(chan interface{}),
 		errorCh:   make(chan error, 1),
+		ipAddrsMu: &sync.RWMutex{},
 		clients:   make(map[string]net.Conn),
 		clientsMu: &sync.RWMutex{},
 	}
@@ -68,6 +71,13 @@ func New(cfg *config.Config) *Server {
 		log.Fatal(err)
 	}
 	log.Print("firewall configured")
+
+	ipAddrs, err := util.GenerateIPAddrs(cfg.TunCIDR)
+	if err != nil {
+		log.Fatal(err)
+	}
+	log.Print("generated client ip addresses")
+	s.ipAddrs = ipAddrs
 
 	s.wg.Add(2)
 	go s.listen()
@@ -126,7 +136,29 @@ func (s *Server) handleConnection(conn net.Conn) {
 	log.Printf("new connection from %v", conn.RemoteAddr())
 	defer log.Printf("closed connection to %v", conn.RemoteAddr())
 
-	hinfo := &handshake.Info{Salt: s.salt, Key: s.key, IP: net.ParseIP("10.1.0.2")}
+	if len(s.ipAddrs) == 0 {
+		log.Printf("all available ip addresses used... disconnecting client")
+	}
+	s.ipAddrsMu.Lock()
+	ip := s.ipAddrs[0]
+	s.ipAddrs = s.ipAddrs[1:]
+	s.ipAddrsMu.Unlock()
+	defer func() {
+		s.ipAddrsMu.Lock()
+		s.ipAddrs = append(s.ipAddrs, ip)
+		s.ipAddrsMu.Unlock()
+	}()
+
+	s.clientsMu.Lock()
+	s.clients[ip] = conn
+	s.clientsMu.Unlock()
+	defer func() {
+		s.clientsMu.Lock()
+		delete(s.clients, ip)
+		s.clientsMu.Unlock()
+	}()
+
+	hinfo := &handshake.Info{Salt: s.salt, Key: s.key, IP: ip}
 	if err := handshake.ServerWithClient(conn, hinfo); err != nil {
 		log.Print(err)
 		return
@@ -158,9 +190,9 @@ ReadLoop:
 			}
 			pkt := packet.Packet(data)
 
-			s.clientsMu.Lock()
-			s.clients[string(pkt.Source())] = conn
-			s.clientsMu.Unlock()
+			if pkt.Source() != ip {
+				continue
+			}
 
 			if s.cfg.LogTraffic {
 				log.Printf("sending %v", pkt)
@@ -197,7 +229,7 @@ func (s *Server) handleInterface() {
 		pkt := packet.Packet(buf[:n])
 
 		s.clientsMu.RLock()
-		conn := s.clients[string(pkt.Destination())]
+		conn := s.clients[pkt.Destination()]
 		s.clientsMu.RUnlock()
 		if conn == nil {
 			continue
@@ -214,7 +246,8 @@ func (s *Server) handleInterface() {
 		}
 
 		if err := util.WriteToConn(conn, data); err != nil {
-			delete(s.clients, string(pkt.Destination()))
+			// log.Print(err)
+			continue
 		}
 	}
 }

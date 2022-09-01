@@ -49,10 +49,10 @@ func New(cfg *config.Config) *Client {
 	if err != nil {
 		log.Fatal(err)
 	}
-	log.Print("handshake done... got key")
+	log.Printf("handshake done... got key and ip(%v)", hinfo.IP)
 	c.key = hinfo.Key
 
-	cfg.TunCIDR = hinfo.IP.String() + "/32"
+	cfg.TunCIDR = hinfo.IP + "/32"
 
 	iface, err := tun.New(cfg)
 	if err != nil {

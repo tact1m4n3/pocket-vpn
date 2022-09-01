@@ -14,7 +14,7 @@ const AUTH_MSG = "AUTH_MSG"
 type Info struct {
 	Salt []byte
 	Key  []byte
-	IP   net.IP
+	IP   string
 }
 
 func ClientWithServer(conn net.Conn, passphrase string) (*Info, error) {
@@ -36,12 +36,11 @@ func ClientWithServer(conn net.Conn, passphrase string) (*Info, error) {
 		return nil, errors.New("authentication failed")
 	}
 
-	ip := make([]byte, 16)
-	n, err := conn.Read(ip)
+	ip, err := util.ReadFromConn(conn)
 	if err != nil {
 		return nil, err
 	}
-	info.IP = net.IP(ip[:n])
+	info.IP = string(ip)
 
 	return info, nil
 }
@@ -55,7 +54,7 @@ func ServerWithClient(conn net.Conn, info *Info) error {
 		return errors.New("client authentication failed")
 	}
 
-	if _, err := conn.Write(info.IP); err != nil {
+	if err := util.WriteToConn(conn, []byte(info.IP)); err != nil {
 		return err
 	}
 

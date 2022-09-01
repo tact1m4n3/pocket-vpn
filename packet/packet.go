@@ -13,7 +13,7 @@ const (
 
 type Packet []byte
 
-func Ping(src net.IP, dst net.IP, seq int) Packet {
+func Ping(srcIP string, dstIP string, seq int) Packet {
 	var buf []byte
 
 	buf = append(buf, []byte{
@@ -21,8 +21,8 @@ func Ping(src net.IP, dst net.IP, seq int) Packet {
 		0xab, 0xcd, 0x00, 0x00,
 		0x40, 0x01, 0x00, 0x00,
 	}...)
-	buf = append(buf, src.To4()...)
-	buf = append(buf, dst.To4()...)
+	buf = append(buf, net.ParseIP(srcIP)...)
+	buf = append(buf, net.ParseIP(dstIP)...)
 
 	buf = append(buf, []byte{
 		0x08, 0x00, 0x00, 0x00,
@@ -53,24 +53,24 @@ func (p Packet) Version() int {
 	return int((p[0] >> 4) & 0xf)
 }
 
-func (p Packet) Source() net.IP {
+func (p Packet) Source() string {
 	v := p.Version()
 	if v == IPv4 {
-		return net.IP(p[12:16])
+		return net.IP(p[12:16]).String()
 	} else if v == IPv6 {
-		return net.IP(p[8:24])
+		return net.IP(p[8:24]).String()
 	}
-	return nil
+	return ""
 }
 
-func (p Packet) Destination() net.IP {
+func (p Packet) Destination() string {
 	v := p.Version()
 	if v == IPv4 {
-		return net.IP(p[16:20])
+		return net.IP(p[16:20]).String()
 	} else if v == IPv6 {
-		return net.IP(p[24:40])
+		return net.IP(p[24:40]).String()
 	}
-	return nil
+	return ""
 }
 
 func (p Packet) String() string {
