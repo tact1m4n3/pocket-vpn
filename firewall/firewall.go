@@ -21,7 +21,7 @@ func Init(iface *water.Interface, cfg *config.Config) error {
 		util.RunCommand("sysctl", "-w", "net.inet.ip.forwarding=1")
 		util.RunCommand("bash", "-c", fmt.Sprintf(
 			"echo 'nat on %v inet from %v:network to any -> (%v)' | pfctl -v -ef -",
-			iface, iface.Name(), iface,
+			cfg.PhysIface, iface.Name(), cfg.PhysIface,
 		))
 		return nil
 	} else {

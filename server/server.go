@@ -4,7 +4,6 @@ import (
 	"io"
 	"log"
 	"net"
-	"net/netip"
 	"os"
 	"os/signal"
 	"sync"
@@ -58,11 +57,7 @@ func New(cfg *config.Config) *Server {
 	log.Printf("listening for connections on %v", listener.Addr())
 	s.listener = listener
 
-	_, ipnet, err := net.ParseCIDR(cfg.TunCIDR)
-	if err != nil {
-		log.Fatal(err)
-	}
-	iface, err := tun.New(ipnet, cfg.TunMTU)
+	iface, err := tun.New(cfg)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -131,7 +126,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 	log.Printf("new connection from %v", conn.RemoteAddr())
 	defer log.Printf("closed connection to %v", conn.RemoteAddr())
 
-	hinfo := &handshake.Info{Salt: s.salt, Key: s.key, IP: netip.MustParseAddr("10.1.0.2")}
+	hinfo := &handshake.Info{Salt: s.salt, Key: s.key, IP: net.ParseIP("10.1.0.2")}
 	if err := handshake.ServerWithClient(conn, hinfo); err != nil {
 		log.Print(err)
 		return
@@ -168,7 +163,7 @@ ReadLoop:
 			s.clientsMu.Unlock()
 
 			if s.cfg.LogTraffic {
-				log.Printf("received %v", pkt)
+				log.Printf("sending %v", pkt)
 			}
 
 			if _, err := s.iface.Write(pkt); err != nil {
@@ -209,7 +204,7 @@ func (s *Server) handleInterface() {
 		}
 
 		if s.cfg.LogTraffic {
-			log.Printf("sending %v", pkt)
+			log.Printf("received %v", pkt)
 		}
 
 		data, err := crypt.Encrypt(pkt, s.key)

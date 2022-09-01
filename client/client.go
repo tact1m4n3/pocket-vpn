@@ -52,7 +52,9 @@ func New(cfg *config.Config) *Client {
 	log.Print("handshake done... got key")
 	c.key = hinfo.Key
 
-	iface, err := tun.New(&net.IPNet{IP: hinfo.IP.AsSlice(), Mask: net.CIDRMask(128, 128)}, cfg.TunMTU)
+	cfg.TunCIDR = hinfo.IP.String() + "/32"
+
+	iface, err := tun.New(cfg)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -120,7 +122,7 @@ func (c *Client) handleConnection() {
 
 		pkt := packet.Packet(data)
 		if c.cfg.LogTraffic {
-			log.Printf("sending %v", pkt)
+			log.Printf("received %v", pkt)
 		}
 
 		if _, err := c.iface.Write(pkt); err != nil {
@@ -153,7 +155,7 @@ func (c *Client) handleTun() {
 
 		pkt := packet.Packet(buf[:n])
 		if c.cfg.LogTraffic {
-			log.Printf("received %v", pkt)
+			log.Printf("sending %v", pkt)
 		}
 
 		data, err := crypt.Encrypt(pkt, c.key)

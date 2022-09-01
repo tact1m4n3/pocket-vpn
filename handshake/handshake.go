@@ -4,7 +4,6 @@ import (
 	"errors"
 	"io"
 	"net"
-	"net/netip"
 
 	"github.com/tact1m4n3/pocket-vpn/crypt"
 	"github.com/tact1m4n3/pocket-vpn/util"
@@ -15,7 +14,7 @@ const AUTH_MSG = "AUTH_MSG"
 type Info struct {
 	Salt []byte
 	Key  []byte
-	IP   netip.Addr
+	IP   net.IP
 }
 
 func ClientWithServer(conn net.Conn, passphrase string) (*Info, error) {
@@ -42,7 +41,7 @@ func ClientWithServer(conn net.Conn, passphrase string) (*Info, error) {
 	if err != nil {
 		return nil, err
 	}
-	info.IP, _ = netip.AddrFromSlice(ip[:n])
+	info.IP = net.IP(ip[:n])
 
 	return info, nil
 }
@@ -56,7 +55,7 @@ func ServerWithClient(conn net.Conn, info *Info) error {
 		return errors.New("client authentication failed")
 	}
 
-	if _, err := conn.Write(info.IP.AsSlice()); err != nil {
+	if _, err := conn.Write(info.IP); err != nil {
 		return err
 	}
 
