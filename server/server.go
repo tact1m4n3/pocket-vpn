@@ -29,7 +29,6 @@ type Server struct {
 	salt      []byte
 	listener  net.Listener
 	iface     *water.Interface
-	zeroIP    string
 	ipAddrs   []string
 	ipAddrsMu *sync.RWMutex
 	clients   map[string]net.Conn
@@ -72,12 +71,6 @@ func New(cfg *config.Config) *Server {
 		log.Fatal(err)
 	}
 	log.Print("firewall configured")
-
-	zeroIP, err := util.GetZeroIP(cfg.TunCIDR)
-	if err != nil {
-		log.Fatal(err)
-	}
-	s.zeroIP = zeroIP
 
 	ipAddrs, err := util.GenerateIPAddrs(cfg.TunCIDR)
 	if err != nil {
@@ -178,7 +171,7 @@ ReadLoop:
 			return
 		default:
 			conn.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
-			data, err := util.ReadFromConn(conn)
+			encrypted, err := util.ReadFromConn(conn)
 			if err != nil {
 				if opErr, ok := err.(*net.OpError); ok && opErr.Timeout() {
 					continue ReadLoop
@@ -190,12 +183,12 @@ ReadLoop:
 				}
 			}
 
-			data, err = crypt.Decrypt(data, s.key)
+			plaintext, err := crypt.Decrypt(encrypted, s.key)
 			if err != nil {
 				log.Print(err)
 				continue
 			}
-			pkt := packet.Packet(data)
+			pkt := packet.Packet(plaintext)
 
 			if pkt.Source() != ip {
 				continue
@@ -205,13 +198,18 @@ ReadLoop:
 				log.Printf("sending %v", pkt)
 			}
 
-			if _, err := s.iface.Write(pkt); err != nil {
-				select {
-				case <-s.quitCh:
-					return
-				default:
-					log.Print(err)
-					return
+			dstConn := s.getConnection(pkt.Destination())
+			if dstConn != nil {
+				util.WriteToConn(dstConn, encrypted)
+			} else {
+				if _, err := s.iface.Write(pkt); err != nil {
+					select {
+					case <-s.quitCh:
+						return
+					default:
+						log.Print(err)
+						return
+					}
 				}
 			}
 		}
@@ -235,7 +233,8 @@ func (s *Server) handleInterface() {
 		}
 		pkt := packet.Packet(buf[:n])
 
-		if pkt.Source() == s.zeroIP {
+		conn := s.getConnection(pkt.Destination())
+		if conn == nil {
 			continue
 		}
 
@@ -249,10 +248,13 @@ func (s *Server) handleInterface() {
 			continue
 		}
 
-		s.clientsMu.RLock()
-		for _, conn := range s.clients {
-			util.WriteToConn(conn, data)
-		}
-		s.clientsMu.RUnlock()
+		util.WriteToConn(conn, data)
 	}
+}
+
+func (s *Server) getConnection(ip string) net.Conn {
+	s.clientsMu.RLock()
+	defer s.clientsMu.RUnlock()
+
+	return s.clients[ip]
 }
