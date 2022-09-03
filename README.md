@@ -4,7 +4,7 @@
 ## Features :sunglasses:
 - Fast
 - Reliable
-- Not that Secure (:exclamation: do not use for sensitive information, *yet*)
+- Not that Secure (:exclamation: do not use it for sensitive information, *yet*)
 
 ## Support :ok_hand:
 - MacOS (server and client)
@@ -20,7 +20,7 @@ Usage of ./pocket-vpn:
   -c string
         tun cidr address (default "10.1.0.1/24")
   -i string
-        physical interface (default "en1")
+        physical interface
   -m int
         tun mtu (default 1500)
   -p string
