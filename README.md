@@ -2,9 +2,9 @@
 > A VPN that can fit right in your pocket!
 
 ## Features :sunglasses:
-- Secure
 - Fast
 - Reliable
+- Not that Secure (:exclamation: do not use for sensitive information, *yet*)
 
 ## Support :ok_hand:
 - MacOS (server and client)
