@@ -29,6 +29,7 @@ type Server struct {
 	salt      []byte
 	listener  net.Listener
 	iface     *water.Interface
+	zeroIP    string
 	ipAddrs   []string
 	ipAddrsMu *sync.RWMutex
 	clients   map[string]net.Conn
@@ -71,6 +72,12 @@ func New(cfg *config.Config) *Server {
 		log.Fatal(err)
 	}
 	log.Print("firewall configured")
+
+	zeroIP, err := util.GetZeroIP(cfg.TunCIDR)
+	if err != nil {
+		log.Fatal(err)
+	}
+	s.zeroIP = zeroIP
 
 	ipAddrs, err := util.GenerateIPAddrs(cfg.TunCIDR)
 	if err != nil {
@@ -228,10 +235,7 @@ func (s *Server) handleInterface() {
 		}
 		pkt := packet.Packet(buf[:n])
 
-		s.clientsMu.RLock()
-		conn := s.clients[pkt.Destination()]
-		s.clientsMu.RUnlock()
-		if conn == nil {
+		if pkt.Source() == s.zeroIP {
 			continue
 		}
 
@@ -245,9 +249,10 @@ func (s *Server) handleInterface() {
 			continue
 		}
 
-		if err := util.WriteToConn(conn, data); err != nil {
-			// log.Print(err)
-			continue
+		s.clientsMu.RLock()
+		for _, conn := range s.clients {
+			util.WriteToConn(conn, data)
 		}
+		s.clientsMu.RUnlock()
 	}
 }

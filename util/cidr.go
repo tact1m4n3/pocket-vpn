@@ -4,6 +4,14 @@ import (
 	"net"
 )
 
+func GetZeroIP(cidr string) (string, error) {
+	ip, ipnet, err := net.ParseCIDR(cidr)
+	if err != nil {
+		return "", err
+	}
+	return ip.Mask(ipnet.Mask).String(), nil
+}
+
 func GenerateIPAddrs(cidr string) ([]string, error) {
 	ip, ipnet, err := net.ParseCIDR(cidr)
 	if err != nil {
