@@ -24,10 +24,12 @@ type Server struct {
 	quitCh  chan struct{}
 	errorCh chan error
 
-	key []byte
-	ip  string
+	key     []byte
+	ip      string
+	network string
 
-	clients map[string]*net.UDPAddr
+	clients   map[string]*net.UDPAddr
+	clientsMu *sync.RWMutex
 
 	iface *water.Interface
 	conn  *net.UDPConn
@@ -41,7 +43,8 @@ func New(cfg *config.Config) *Server {
 		quitCh:  make(chan struct{}),
 		errorCh: make(chan error, 1),
 
-		clients: make(map[string]*net.UDPAddr),
+		clients:   make(map[string]*net.UDPAddr),
+		clientsMu: &sync.RWMutex{},
 	}
 
 	key, err := crypt.GenerateKey(cfg.Passphrase)
@@ -51,12 +54,13 @@ func New(cfg *config.Config) *Server {
 	log.Print("generated key based on passphrase")
 	s.key = key
 
-	ip, _, err := util.ParseCIDR(cfg.TunCIDR)
+	ip, network, err := util.ParseCIDR(cfg.TunCIDR)
 	if err != nil {
 		log.Fatal(err)
 	}
-	log.Printf("using ip %v", ip)
+	log.Printf("using ip %v in network %v", ip, network)
 	s.ip = ip
+	s.network = network
 
 	iface, err := tun.New()
 	if err != nil {
@@ -133,7 +137,10 @@ func (s *Server) handleInterface() {
 		if s.cfg.LogTraffic {
 			log.Printf("sending %v", pkt)
 		}
+
+		s.clientsMu.RLock()
 		addr := s.clients[pkt.Destination()]
+		s.clientsMu.RUnlock()
 		if addr == nil {
 			continue
 		}
@@ -171,10 +178,18 @@ func (s *Server) handleConnection() {
 		}
 
 		pkt := packet.Packet(data)
+		pktSrc := pkt.Source()
+		if pktSrc == s.ip {
+			continue
+		}
+
+		s.clientsMu.Lock()
+		s.clients[pktSrc] = addr
+		s.clientsMu.Unlock()
+
 		if s.cfg.LogTraffic {
 			log.Printf("received %v", pkt)
 		}
-		s.clients[pkt.Source()] = addr
 
 		if _, err := s.iface.Write(pkt); err != nil {
 			s.errorCh <- err

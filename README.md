@@ -13,8 +13,8 @@
 
 ## Usage :brain:
 ```
-Usage of ./pocket-vpn:
-  -A    send all traffic through vpn
+usage: ./pocket-vpn [options] [passphrase]
+  -A    capture all traffic
   -L    log all traffic to stdout
   -S    start vpn in server mode
   -c string
@@ -23,8 +23,6 @@ Usage of ./pocket-vpn:
         physical interface
   -m int
         tun mtu (default 1500)
-  -p string
-        passphrase (default "verysecretsecret")
   -s string
-        server address (default ":25566")
+        remote address (default ":25566")
 ```
