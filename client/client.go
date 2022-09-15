@@ -1,8 +1,6 @@
 package client
 
 import (
-	"errors"
-	"io"
 	"log"
 	"net"
 	"os"
@@ -13,7 +11,6 @@ import (
 	"github.com/songgao/water"
 	"github.com/tact1m4n3/pocket-vpn/config"
 	"github.com/tact1m4n3/pocket-vpn/crypt"
-	"github.com/tact1m4n3/pocket-vpn/handshake"
 	"github.com/tact1m4n3/pocket-vpn/packet"
 	"github.com/tact1m4n3/pocket-vpn/routes"
 	"github.com/tact1m4n3/pocket-vpn/tun"
@@ -21,45 +18,63 @@ import (
 )
 
 type Client struct {
-	cfg     *config.Config
+	cfg *config.Config
+
 	wg      *sync.WaitGroup
-	quitCh  chan interface{}
+	quitCh  chan struct{}
 	errorCh chan error
-	key     []byte
-	conn    net.Conn
-	iface   *water.Interface
+
+	key []byte
+	ip  string
+
+	iface *water.Interface
+	conn  *net.UDPConn
 }
 
 func New(cfg *config.Config) *Client {
 	c := &Client{
-		cfg:     cfg,
+		cfg: cfg,
+
 		wg:      &sync.WaitGroup{},
-		quitCh:  make(chan interface{}),
+		quitCh:  make(chan struct{}),
 		errorCh: make(chan error, 1),
 	}
 
-	conn, err := net.Dial("tcp", cfg.ServerAddr)
+	key, err := crypt.GenerateKey(cfg.Passphrase)
 	if err != nil {
 		log.Fatal(err)
 	}
-	log.Printf("successfully connected to %v", conn.RemoteAddr())
-	c.conn = conn
+	log.Print("generated key based on passphrase")
+	c.key = key
 
-	hinfo, err := handshake.ClientWithServer(conn, cfg.Passphrase)
+	ip, _, err := util.ParseCIDR(cfg.TunCIDR)
 	if err != nil {
 		log.Fatal(err)
 	}
-	log.Printf("handshake done... got key and ip(%v)", hinfo.IP)
-	c.key = hinfo.Key
+	log.Printf("using ip %v", ip)
+	c.ip = ip
 
-	cfg.TunCIDR = hinfo.IP + "/32"
-
-	iface, err := tun.New(cfg)
+	iface, err := tun.New()
 	if err != nil {
 		log.Fatal(err)
 	}
 	log.Printf("using tun interface %v", iface.Name())
 	c.iface = iface
+
+	raddr, err := net.ResolveUDPAddr("udp", cfg.ServerAddr)
+	if err != nil {
+		log.Fatal(err)
+	}
+	conn, err := net.DialUDP("udp", nil, raddr)
+	if err != nil {
+		log.Fatal(err)
+	}
+	c.conn = conn
+	log.Printf("connected to %v...", conn.RemoteAddr())
+
+	if err := tun.Config(iface, cfg); err != nil {
+		log.Fatal(err)
+	}
 
 	if err := routes.Init(iface, cfg); err != nil {
 		log.Fatal(err)
@@ -67,8 +82,8 @@ func New(cfg *config.Config) *Client {
 	log.Print("routes configured")
 
 	c.wg.Add(2)
+	go c.handleInterface()
 	go c.handleConnection()
-	go c.handleTun()
 
 	return c
 }
@@ -94,53 +109,10 @@ func (c *Client) Shutdown() {
 	c.wg.Wait()
 }
 
-func (c *Client) handleConnection() {
+func (c *Client) handleInterface() {
 	defer c.wg.Done()
 
-	for {
-		data, err := util.ReadFromConn(c.conn)
-		if err != nil {
-			if err == io.EOF {
-				c.errorCh <- errors.New("disconnected from server")
-				return
-			} else {
-				select {
-				case <-c.quitCh:
-					return
-				default:
-					c.errorCh <- err
-					return
-				}
-			}
-		}
-
-		data, err = crypt.Decrypt(data, c.key)
-		if err != nil {
-			log.Print(err)
-			continue
-		}
-
-		pkt := packet.Packet(data)
-		if c.cfg.LogTraffic {
-			log.Printf("received %v", pkt)
-		}
-
-		if _, err := c.iface.Write(pkt); err != nil {
-			select {
-			case <-c.quitCh:
-				return
-			default:
-				c.errorCh <- err
-				return
-			}
-		}
-	}
-}
-
-func (c *Client) handleTun() {
-	defer c.wg.Done()
-
-	buf := make([]byte, 2000)
+	buf := make([]byte, c.cfg.TunMTU)
 	for {
 		n, err := c.iface.Read(buf)
 		if err != nil {
@@ -160,11 +132,42 @@ func (c *Client) handleTun() {
 
 		data, err := crypt.Encrypt(pkt, c.key)
 		if err != nil {
+			log.Print(err)
+			continue
+		}
+
+		if _, err := c.conn.Write(data); err != nil {
+			c.errorCh <- err
+			return
+		}
+	}
+}
+
+func (c *Client) handleConnection() {
+	defer c.wg.Done()
+
+	for i := 0; i < 5; i++ {
+		hello := packet.Ping(c.ip, "0.0.0.0", i)
+		if c.cfg.LogTraffic {
+			log.Printf("sending %v", hello)
+		}
+
+		data, err := crypt.Encrypt(hello, c.key)
+		if err != nil {
 			c.errorCh <- err
 			return
 		}
 
-		if err := util.WriteToConn(c.conn, data); err != nil {
+		if _, err := c.conn.Write(data); err != nil {
+			c.errorCh <- err
+			return
+		}
+	}
+
+	buf := make([]byte, 2000)
+	for {
+		n, err := c.conn.Read(buf)
+		if err != nil {
 			select {
 			case <-c.quitCh:
 				return
@@ -172,6 +175,22 @@ func (c *Client) handleTun() {
 				c.errorCh <- err
 				return
 			}
+		}
+
+		data, err := crypt.Decrypt(buf[:n], c.key)
+		if err != nil {
+			log.Print(err)
+			continue
+		}
+
+		pkt := packet.Packet(data)
+		if c.cfg.LogTraffic {
+			log.Printf("received %v", pkt)
+		}
+
+		if _, err := c.iface.Write(pkt); err != nil {
+			c.errorCh <- err
+			return
 		}
 	}
 }

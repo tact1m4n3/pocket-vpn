@@ -6,23 +6,12 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"errors"
-
-	"golang.org/x/crypto/pbkdf2"
 )
 
-func GenerateKey(passphrase string, usersalt []byte) ([]byte, []byte, error) {
-	var salt []byte
-	if usersalt == nil {
-		salt = make([]byte, 8)
-		if _, err := rand.Read(salt); err != nil {
-			return nil, nil, err
-		}
-	} else {
-		salt = usersalt
-	}
-
-	key := pbkdf2.Key([]byte(passphrase), salt, 100, 32, sha256.New)
-	return key, salt, nil
+func GenerateKey(passphrase string) ([]byte, error) {
+	h := sha256.New()
+	h.Write([]byte(passphrase))
+	return h.Sum(nil), nil
 }
 
 func Encrypt(plaintext []byte, key []byte) ([]byte, error) {

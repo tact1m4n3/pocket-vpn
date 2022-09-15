@@ -21,8 +21,8 @@ func Ping(srcIP string, dstIP string, seq int) Packet {
 		0xab, 0xcd, 0x00, 0x00,
 		0x40, 0x01, 0x00, 0x00,
 	}...)
-	buf = append(buf, net.ParseIP(srcIP)...)
-	buf = append(buf, net.ParseIP(dstIP)...)
+	buf = append(buf, net.ParseIP(srcIP).To4()...)
+	buf = append(buf, net.ParseIP(dstIP).To4()...)
 
 	buf = append(buf, []byte{
 		0x08, 0x00, 0x00, 0x00,
