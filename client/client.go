@@ -7,6 +7,7 @@ import (
 	"os/signal"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/songgao/water"
 	"github.com/tact1m4n3/pocket-vpn/config"
@@ -24,11 +25,14 @@ type Client struct {
 	quitCh  chan struct{}
 	errorCh chan error
 
-	key []byte
-	ip  string
+	key  []byte
+	myIP string
 
 	iface *water.Interface
 	conn  *net.UDPConn
+
+	toIfaceCh chan packet.Packet
+	toConnCh  chan packet.Packet
 }
 
 func New(cfg *config.Config) *Client {
@@ -38,6 +42,9 @@ func New(cfg *config.Config) *Client {
 		wg:      &sync.WaitGroup{},
 		quitCh:  make(chan struct{}),
 		errorCh: make(chan error, 1),
+
+		toIfaceCh: make(chan packet.Packet, 1),
+		toConnCh:  make(chan packet.Packet, 1),
 	}
 
 	key, err := crypt.GenerateKey(cfg.Passphrase)
@@ -47,12 +54,12 @@ func New(cfg *config.Config) *Client {
 	log.Print("generated key based on passphrase")
 	c.key = key
 
-	ip, _, err := util.ParseCIDR(cfg.TunCIDR)
+	myIP, _, err := util.ParseCIDR(cfg.TunCIDR)
 	if err != nil {
 		log.Fatal(err)
 	}
-	log.Printf("using ip %v", ip)
-	c.ip = ip
+	log.Printf("using ip %v", myIP)
+	c.myIP = myIP
 
 	iface, err := tun.New()
 	if err != nil {
@@ -81,9 +88,10 @@ func New(cfg *config.Config) *Client {
 	}
 	log.Print("routes configured")
 
-	c.wg.Add(2)
+	c.wg.Add(3)
 	go c.handleInterface()
 	go c.handleConnection()
+	go c.keepAlive()
 
 	return c
 }
@@ -106,11 +114,35 @@ func (c *Client) Shutdown() {
 	c.iface.Close()
 	c.conn.Close()
 
+	close(c.toIfaceCh)
+	close(c.toConnCh)
+
 	c.wg.Wait()
 }
 
 func (c *Client) handleInterface() {
 	defer c.wg.Done()
+
+	c.wg.Add(1)
+	go func() {
+		defer c.wg.Done()
+
+		for {
+			select {
+			case <-c.quitCh:
+				return
+			case pkt := <-c.toIfaceCh:
+				if c.cfg.LogTraffic {
+					log.Printf("sending through interface %v", pkt)
+				}
+
+				if _, err := c.iface.Write(pkt); err != nil {
+					c.errorCh <- err
+					return
+				}
+			}
+		}
+	}()
 
 	buf := make([]byte, c.cfg.TunMTU)
 	for {
@@ -126,43 +158,39 @@ func (c *Client) handleInterface() {
 		}
 
 		pkt := packet.Packet(buf[:n])
-		if c.cfg.LogTraffic {
-			log.Printf("sending %v", pkt)
-		}
-
-		data, err := crypt.Encrypt(pkt, c.key)
-		if err != nil {
-			log.Print(err)
-			continue
-		}
-
-		if _, err := c.conn.Write(data); err != nil {
-			c.errorCh <- err
-			return
-		}
+		c.toConnCh <- pkt
 	}
 }
 
 func (c *Client) handleConnection() {
 	defer c.wg.Done()
 
-	for i := 0; i < 5; i++ {
-		hello := packet.Ping(c.ip, "0.0.0.0", i)
-		if c.cfg.LogTraffic {
-			log.Printf("sending %v", hello)
-		}
+	c.wg.Add(1)
+	go func() {
+		defer c.wg.Done()
 
-		data, err := crypt.Encrypt(hello, c.key)
-		if err != nil {
-			c.errorCh <- err
-			return
-		}
+		for {
+			select {
+			case <-c.quitCh:
+				return
+			case pkt := <-c.toConnCh:
+				if c.cfg.LogTraffic {
+					log.Printf("sending through socket %v", pkt)
+				}
 
-		if _, err := c.conn.Write(data); err != nil {
-			c.errorCh <- err
-			return
+				data, err := crypt.Encrypt(pkt, c.key)
+				if err != nil {
+					c.errorCh <- err
+					return
+				}
+
+				if _, err := c.conn.Write(data); err != nil {
+					c.errorCh <- err
+					return
+				}
+			}
 		}
-	}
+	}()
 
 	buf := make([]byte, 2000)
 	for {
@@ -184,13 +212,21 @@ func (c *Client) handleConnection() {
 		}
 
 		pkt := packet.Packet(data)
-		if c.cfg.LogTraffic {
-			log.Printf("received %v", pkt)
-		}
+		c.toIfaceCh <- pkt
+	}
+}
 
-		if _, err := c.iface.Write(pkt); err != nil {
-			c.errorCh <- err
+func (c *Client) keepAlive() {
+	defer c.wg.Done()
+
+	for {
+		pkt := packet.Ping(c.myIP, "0.0.0.0", 0)
+		c.toConnCh <- pkt
+
+		select {
+		case <-c.quitCh:
 			return
+		case <-time.After(5 * time.Second):
 		}
 	}
 }

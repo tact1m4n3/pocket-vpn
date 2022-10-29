@@ -7,7 +7,9 @@ import (
 	"os/signal"
 	"sync"
 	"syscall"
+	"time"
 
+	"github.com/patrickmn/go-cache"
 	"github.com/songgao/water"
 	"github.com/tact1m4n3/pocket-vpn/config"
 	"github.com/tact1m4n3/pocket-vpn/crypt"
@@ -25,14 +27,16 @@ type Server struct {
 	errorCh chan error
 
 	key     []byte
-	ip      string
+	myIP    string
 	network string
 
-	clients   map[string]*net.UDPAddr
-	clientsMu *sync.RWMutex
+	clients *cache.Cache
 
 	iface *water.Interface
 	conn  *net.UDPConn
+
+	toIfaceCh chan packet.Packet
+	toConnCh  chan packet.Packet
 }
 
 func New(cfg *config.Config) *Server {
@@ -43,8 +47,10 @@ func New(cfg *config.Config) *Server {
 		quitCh:  make(chan struct{}),
 		errorCh: make(chan error, 1),
 
-		clients:   make(map[string]*net.UDPAddr),
-		clientsMu: &sync.RWMutex{},
+		clients: cache.New(20*time.Second, 20*time.Second),
+
+		toIfaceCh: make(chan packet.Packet, 1),
+		toConnCh:  make(chan packet.Packet, 1),
 	}
 
 	key, err := crypt.GenerateKey(cfg.Passphrase)
@@ -54,12 +60,12 @@ func New(cfg *config.Config) *Server {
 	log.Print("generated key based on passphrase")
 	s.key = key
 
-	ip, network, err := util.ParseCIDR(cfg.TunCIDR)
+	myIP, network, err := util.ParseCIDR(cfg.TunCIDR)
 	if err != nil {
 		log.Fatal(err)
 	}
-	log.Printf("using ip %v in network %v", ip, network)
-	s.ip = ip
+	log.Printf("using ip %v in network %v", myIP, network)
+	s.myIP = myIP
 	s.network = network
 
 	iface, err := tun.New()
@@ -114,11 +120,35 @@ func (s *Server) Shutdown() {
 	s.iface.Close()
 	s.conn.Close()
 
+	close(s.toIfaceCh)
+	close(s.toConnCh)
+
 	s.wg.Wait()
 }
 
 func (s *Server) handleInterface() {
 	defer s.wg.Done()
+
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+
+		for {
+			select {
+			case <-s.quitCh:
+				return
+			case pkt := <-s.toIfaceCh:
+				if s.cfg.LogTraffic {
+					log.Printf("sending through interface %v", pkt)
+				}
+
+				if _, err := s.iface.Write(pkt); err != nil {
+					s.errorCh <- err
+					return
+				}
+			}
+		}
+	}()
 
 	buf := make([]byte, s.cfg.TunMTU)
 	for {
@@ -134,29 +164,42 @@ func (s *Server) handleInterface() {
 		}
 
 		pkt := packet.Packet(buf[:n])
-		if s.cfg.LogTraffic {
-			log.Printf("sending %v", pkt)
-		}
-
-		s.clientsMu.RLock()
-		addr := s.clients[pkt.Destination()]
-		s.clientsMu.RUnlock()
-		if addr == nil {
-			continue
-		}
-
-		data, err := crypt.Encrypt(pkt, s.key)
-		if err != nil {
-			log.Print(err)
-			continue
-		}
-
-		s.conn.WriteToUDP(data, addr)
+		s.toConnCh <- pkt
 	}
 }
 
 func (s *Server) handleConnection() {
 	defer s.wg.Done()
+
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+
+		for {
+			select {
+			case <-s.quitCh:
+				return
+			case pkt := <-s.toConnCh:
+				if s.cfg.LogTraffic {
+					log.Printf("sending through socket %v", pkt)
+				}
+
+				item, ok := s.clients.Get(pkt.Destination())
+				if !ok {
+					continue
+				}
+				addr := item.(*net.UDPAddr)
+
+				data, err := crypt.Encrypt(pkt, s.key)
+				if err != nil {
+					log.Print(err)
+					continue
+				}
+
+				s.conn.WriteToUDP(data, addr)
+			}
+		}
+	}()
 
 	buf := make([]byte, 2000)
 	for {
@@ -178,22 +221,14 @@ func (s *Server) handleConnection() {
 		}
 
 		pkt := packet.Packet(data)
-		pktSrc := pkt.Source()
-		if pktSrc == s.ip {
-			continue
+		if _, ok := s.clients.Get(pkt.Source()); !ok {
+			s.clients.Set(pkt.Source(), addr, cache.DefaultExpiration)
 		}
 
-		s.clientsMu.Lock()
-		s.clients[pktSrc] = addr
-		s.clientsMu.Unlock()
-
-		if s.cfg.LogTraffic {
-			log.Printf("received %v", pkt)
-		}
-
-		if _, err := s.iface.Write(pkt); err != nil {
-			s.errorCh <- err
-			return
+		if dst, ok := s.clients.Get(pkt.Destination()); ok && dst != "0.0.0.0" {
+			s.toConnCh <- pkt
+		} else {
+			s.toIfaceCh <- pkt
 		}
 	}
 }
